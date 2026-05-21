@@ -1,0 +1,13 @@
+[build]
+target = "aarch64-unknown-linux-gnu"
+# target = "aarch64-unknown-none"
+
+[unstable]
+build-std = ["core", "compiler_builtins"]
+
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+rustflags = ["-C", "link-arg=-nostartfiles", "-C", "link-arg=-static", "-C", "target-feature=+crt-static"]
+
+[target.aarch64-unknown-none]
+rustflags = []

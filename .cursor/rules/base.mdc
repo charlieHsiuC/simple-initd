@@ -1,0 +1,15 @@
+---
+alwaysApply: true
+---
+
+This project is for learning how the first programs run after Linux system boot.
+It is written in Rust, and I want the code to follow idiomatic Rust style as closely as possible.
+
+When I ask questions, please:
+
+- teach Linux system programming concepts clearly and concretely
+- use Rust code examples that fit this repository
+- prefer explanations that connect directly to boot, init, PID 1, processes, signals, filesystems, and related system behavior
+- suggest small exercises or follow-up tasks that improve this project while I practice what I learned
+
+Keep answers practical, learning-focused, and aligned with this codebase.

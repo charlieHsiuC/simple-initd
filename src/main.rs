@@ -4,7 +4,8 @@ use rustix::{
     fs,
     io::Errno,
     mount::{self, MountFlags, mount},
-    process,
+    process::{self, WaitOptions},
+    runtime::{Fork, execve, kernel_fork},
 };
 
 fn main() -> Result<(), i32> {
@@ -15,15 +16,36 @@ fn main() -> Result<(), i32> {
 
     if let Err(err) = mount_helper("proc", "/proc", "proc") {
         eprintln!("mount failed: {err}");
-        return Err(err.raw_os_error());
     }
 
     if let Err(err) = mount_helper("sys", "/sys", "sys") {
         eprintln!("mount failed: {err}");
-        return Err(err.raw_os_error());
     }
 
-    Ok(())
+    spawn_shell();
+
+    loop {
+        // wait
+        match process::wait(WaitOptions::empty()) {
+            Ok(Some((pid, status))) => {
+                if status.exited() {
+                    let exit_code = status.exit_status().unwrap();
+                    println!("child {pid} exited with {exit_code}");
+                }
+            }
+            Ok(None) => {}
+            Err(err) => match err {
+                Errno::CHILD => {}
+                Errno::AGAIN => {}
+                Errno::INTR => {}
+                Errno::INVAL => {}
+                Errno::SRCH => {}
+                _ => {
+                    eprintln!("unexpected error with {err}");
+                }
+            },
+        }
+    }
 }
 
 fn mount_helper(source: &str, target: &str, fstype: &str) -> rustix::io::Result<()> {
@@ -59,6 +81,25 @@ fn mount_helper(source: &str, target: &str, fstype: &str) -> rustix::io::Result<
         Err(err) => {
             println!("mount returned errno {:?} ({err})", err.raw_os_error());
             Err(err)
+        }
+    }
+}
+
+fn spawn_shell() {
+    unsafe {
+        match kernel_fork() {
+            Ok(Fork::Child(_pid)) => {
+                let path = c"/bin/sh";
+                let argv = [path.as_ptr(), std::ptr::null()];
+                let envp = [std::ptr::null()];
+                let errno = execve(path, argv.as_ptr(), envp.as_ptr());
+                eprintln!("execve failed: {errno}");
+                std::process::exit(1);
+            }
+            Ok(Fork::ParentOf(child_pid)) => {
+                println!("spawn child {child_pid}");
+            }
+            Err(err) => eprintln!("fork failed: {err}"),
         }
     }
 }

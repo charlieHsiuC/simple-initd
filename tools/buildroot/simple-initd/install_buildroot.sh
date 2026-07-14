@@ -15,7 +15,7 @@ echo "simple_initd_dir: $simple_initd_dir"
 sed -i "s|SIMPLE_INITD_SITE = .*|SIMPLE_INITD_SITE = $simple_initd_dir|" $config_dir/simple-initd.mk
 
 # copy tools/buildroot/simple-initd to buildroot/package/simple-initd
-cp -r $config_dir $buildroot_dir/package/simple-initd
+cp -r $config_dir $buildroot_dir/package
 
 # update package/simple-initd/Config.in to menu "System tools" in buildroot/package/Config.in
 # check if "package/simple-initd/Config.in" not exists in buildroot/package/Config.in

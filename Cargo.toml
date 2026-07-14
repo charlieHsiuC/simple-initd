@@ -5,3 +5,11 @@ edition = "2024"
 
 [dependencies]
 rustix = { version = "1.1.4", features = ["fs", "mount", "process", "runtime", "event"] }
+
+[[bin]]
+name = "simple-initd"
+path = "src/main.rs"
+
+[[bin]]
+name = "bad-parent"
+path = "src/bin/bad_parent.rs"

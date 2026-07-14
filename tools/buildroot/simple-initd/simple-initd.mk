@@ -6,4 +6,5 @@ $(eval $(cargo-package))
 
 define SIMPLE_INITD_INSTALL_TARGET_CMDS
     $(INSTALL) -D -m 0755 $(@D)/target/$(RUSTC_TARGET_NAME)/release/simple-initd $(TARGET_DIR)/sbin/init
+    $(INSTALL) -D -m 0755 $(@D)/target/$(RUSTC_TARGET_NAME)/release/bad-parent $(TARGET_DIR)/sbin/bad-parent
 endef

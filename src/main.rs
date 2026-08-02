@@ -18,11 +18,17 @@ fn main() -> Result<(), i32> {
         eprintln!("mount failed: {err}");
     }
 
-    if let Err(err) = mount_helper("sys", "/sys", "sys") {
+    if let Err(err) = mount_helper("sysfs", "/sys", "sysfs") {
         eprintln!("mount failed: {err}");
     }
 
-    spawn_shell();
+    let mut child_pid = -1;
+    let cmd = c"/bin/sh";
+    if let Ok(spawn_pid) = spawn_child(&cmd, &[], &[]) {
+        child_pid = spawn_pid;
+    } else {
+        eprintln!("start sh fail");
+    }
 
     loop {
         // wait
@@ -31,6 +37,14 @@ fn main() -> Result<(), i32> {
                 if status.exited() {
                     let exit_code = status.exit_status().unwrap();
                     println!("child {pid} exited with {exit_code}");
+                    if child_pid == pid.as_raw_pid() {
+                        child_pid = -1;
+                        if let Ok(spawn_pid) = spawn_child(&cmd, &[], &[]) {
+                            child_pid = spawn_pid;
+                        } else {
+                            eprintln!("start sh fail");
+                        }
+                    }
                 }
             }
             Ok(None) => {}
@@ -85,21 +99,27 @@ fn mount_helper(source: &str, target: &str, fstype: &str) -> rustix::io::Result<
     }
 }
 
-fn spawn_shell() {
+fn spawn_child(cmd: &CStr, args: &[&[u8]], env: &[&[u8]]) -> Result<i32, Errno> {
     unsafe {
         match kernel_fork() {
             Ok(Fork::Child(_pid)) => {
-                let path = c"/bin/sh";
-                let argv = [path.as_ptr(), std::ptr::null()];
-                let envp = [std::ptr::null()];
-                let errno = execve(path, argv.as_ptr(), envp.as_ptr());
-                eprintln!("execve failed: {errno}");
-                std::process::exit(1);
+                let mut argv = vec![cmd.as_ptr()];
+                for i in 0..args.len() {
+                    argv.push(args[i].as_ptr())
+                }
+                argv.push(std::ptr::null());
+
+                let mut envp = vec![];
+                for i in 0..env.len() {
+                    envp.push(env[i].as_ptr());
+                }
+                envp.push(std::ptr::null());
+
+                let errno = execve(cmd, argv.as_ptr(), envp.as_ptr());
+                std::process::exit(errno.raw_os_error());
             }
-            Ok(Fork::ParentOf(child_pid)) => {
-                println!("spawn child {child_pid}");
-            }
-            Err(err) => eprintln!("fork failed: {err}"),
+            Ok(Fork::ParentOf(child_pid)) => Ok(child_pid.as_raw_pid()),
+            Err(err) => Err(err),
         }
     }
 }

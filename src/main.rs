@@ -1,11 +1,12 @@
 use std::ffi::CStr;
 
 use rustix::{
-    fs,
+    fs::{self, OFlags, open},
     io::Errno,
     mount::{self, MountFlags, mount},
-    process::{self, WaitOptions},
+    process::{self, WaitOptions, setsid},
     runtime::{Fork, execve, kernel_fork},
+    stdio::{self},
 };
 
 fn main() -> Result<(), i32> {
@@ -24,7 +25,7 @@ fn main() -> Result<(), i32> {
 
     let mut child_pid = -1;
     let cmd = c"/bin/sh";
-    if let Ok(spawn_pid) = spawn_child(&cmd, &[], &[]) {
+    if let Ok(spawn_pid) = spawn_child(cmd, &[], &[]) {
         child_pid = spawn_pid;
     } else {
         eprintln!("start sh fail");
@@ -39,7 +40,7 @@ fn main() -> Result<(), i32> {
                     println!("child {pid} exited with {exit_code}");
                     if child_pid == pid.as_raw_pid() {
                         child_pid = -1;
-                        if let Ok(spawn_pid) = spawn_child(&cmd, &[], &[]) {
+                        if let Ok(spawn_pid) = spawn_child(cmd, &[], &[]) {
                             child_pid = spawn_pid;
                         } else {
                             eprintln!("start sh fail");
@@ -103,15 +104,49 @@ fn spawn_child(cmd: &CStr, args: &[&[u8]], env: &[&[u8]]) -> Result<i32, Errno> 
     unsafe {
         match kernel_fork() {
             Ok(Fork::Child(_pid)) => {
+                match setsid() {
+                    Ok(_) => {
+                        let fd = open("/dev/ttyAMA0", OFlags::RDWR, fs::Mode::empty());
+                        match fd {
+                            Ok(fd) => {
+                                match stdio::dup2_stdin(&fd) {
+                                    Ok(()) => {}
+                                    Err(err) => {
+                                        std::process::exit(err.raw_os_error());
+                                    }
+                                }
+                                match stdio::dup2_stdout(&fd) {
+                                    Ok(()) => {}
+                                    Err(err) => {
+                                        std::process::exit(err.raw_os_error());
+                                    }
+                                }
+                                match stdio::dup2_stderr(&fd) {
+                                    Ok(()) => {}
+                                    Err(err) => {
+                                        std::process::exit(err.raw_os_error());
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                std::process::exit(err.raw_os_error());
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        std::process::exit(err.raw_os_error());
+                    }
+                }
+
                 let mut argv = vec![cmd.as_ptr()];
-                for i in 0..args.len() {
-                    argv.push(args[i].as_ptr())
+                for v in args {
+                    argv.push(v.as_ptr())
                 }
                 argv.push(std::ptr::null());
 
                 let mut envp = vec![];
-                for i in 0..env.len() {
-                    envp.push(env[i].as_ptr());
+                for v in env {
+                    envp.push(v.as_ptr());
                 }
                 envp.push(std::ptr::null());
 

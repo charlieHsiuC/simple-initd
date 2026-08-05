@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rustix = { version = "1.1.4", features = ["fs", "mount", "process", "runtime", "event"] }
+rustix = { version = "1.1.4", features = ["fs", "mount", "process", "runtime", "event", "stdio"] }
 
 [[bin]]
 name = "simple-initd"

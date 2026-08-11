@@ -1,25 +1,22 @@
-use std::ffi::CStr;
+use std::{ffi::CStr, ptr::null};
 
-use rustix::{
-    fs::{self, OFlags, open},
-    io::Errno,
-    mount::{self, MountFlags, mount},
-    process::{self, WaitOptions, setsid},
-    runtime::{Fork, execve, kernel_fork},
-    stdio::{self},
-};
+use libc::c_int;
+use libc::{self};
 
-fn main() -> Result<(), i32> {
-    if !process::getpid().is_init() {
+use errno::errno;
+
+fn main() -> Result<(), c_int> {
+    let pid = unsafe { libc::getpid() };
+    if pid == 0 {
         eprintln!("Must run as PID 1");
-        return Err(Errno::PERM.raw_os_error());
+        return Err(libc::EPERM);
     }
 
-    if let Err(err) = mount_helper("proc", "/proc", "proc") {
+    if let Err(err) = mount_helper(c"proc", c"/proc", c"proc", 0, null()) {
         eprintln!("mount failed: {err}");
     }
 
-    if let Err(err) = mount_helper("sysfs", "/sys", "sysfs") {
+    if let Err(err) = mount_helper(c"sysfs", c"/sys", c"sysfs", 0, null()) {
         eprintln!("mount failed: {err}");
     }
 
@@ -32,129 +29,126 @@ fn main() -> Result<(), i32> {
     }
 
     loop {
-        // wait
-        match process::wait(WaitOptions::empty()) {
-            Ok(Some((pid, status))) => {
-                if status.exited() {
-                    let exit_code = status.exit_status().unwrap();
-                    println!("child {pid} exited with {exit_code}");
-                    if child_pid == pid.as_raw_pid() {
-                        child_pid = -1;
-                        if let Ok(spawn_pid) = spawn_child(cmd, &[], &[]) {
-                            child_pid = spawn_pid;
-                        } else {
-                            eprintln!("start sh fail");
-                        }
+        let mut status: libc::c_int = 0;
+        let result = unsafe { libc::wait(&mut status as *mut libc::c_int) };
+        match result {
+            pid if pid > 0 && libc::WIFEXITED(status) => {
+                let exit_code = libc::WEXITSTATUS(status);
+                println!("child {pid} exited with {exit_code}");
+                if child_pid == pid {
+                    child_pid = -1;
+                    if let Ok(spawn_pid) = spawn_child(cmd, &[], &[]) {
+                        child_pid = spawn_pid;
+                    } else {
+                        eprintln!("start sh fail");
                     }
                 }
             }
-            Ok(None) => {}
-            Err(err) => match err {
-                Errno::CHILD => {}
-                Errno::AGAIN => {}
-                Errno::INTR => {}
-                Errno::INVAL => {}
-                Errno::SRCH => {}
+            _ => {}
+        }
+    }
+}
+
+fn mount_helper(
+    src: &CStr,
+    target: &CStr,
+    fstype: &CStr,
+    flags: u64,
+    data: *const std::ffi::c_void,
+) -> Result<(), c_int> {
+    let ret = unsafe { libc::mount(src.as_ptr(), target.as_ptr(), fstype.as_ptr(), flags, data) };
+    if ret < 0 {
+        let err = c_int::from(errno());
+        match err {
+            libc::EPERM => {
+                println!("EPERM, permission failed");
+                return Err(err);
+            }
+            libc::EBUSY => {
+                if let Ok(target_str) = target.to_str() {
+                    println!("EBUSY, {target_str} had already mounted");
+                }
+                return Ok(());
+            }
+            libc::ENOENT => {
+                let mkdir_ret = unsafe { libc::mkdir(src.as_ptr(), 0o555) };
+                if mkdir_ret < 0 {
+                    let mkdir_err = c_int::from(errno());
+                    return Err(mkdir_err);
+                } else {
+                    let retry_ret = unsafe {
+                        libc::mount(src.as_ptr(), target.as_ptr(), fstype.as_ptr(), flags, data)
+                    };
+                    let retry_err = c_int::from(errno());
+                    if retry_ret < 0 {
+                        return Err(retry_err);
+                    } else {
+                        return Ok(());
+                    }
+                }
+            }
+            _ => {
+                return Err(err);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn spawn_child(cmd: &CStr, args: &[&[u8]], env: &[&[u8]]) -> Result<i32, c_int> {
+    match unsafe { libc::fork() } {
+        0 => {
+            match unsafe { libc::setsid() } {
+                sid if sid >= 0 => {
+                    let fd = unsafe { libc::open(c"/dev/ttyAMA0".as_ptr(), libc::O_RDWR) };
+                    match fd {
+                        fd if fd >= 0 => {
+                            match unsafe { libc::dup2(fd, libc::STDIN_FILENO) } {
+                                ret if ret >= 0 => {}
+                                _ => {
+                                    std::process::exit(c_int::from(errno()));
+                                }
+                            }
+                            match unsafe { libc::dup2(fd, libc::STDOUT_FILENO) } {
+                                ret if ret >= 0 => {}
+                                _ => {
+                                    std::process::exit(c_int::from(errno()));
+                                }
+                            }
+                            match unsafe { libc::dup2(fd, libc::STDERR_FILENO) } {
+                                ret if ret >= 0 => {}
+                                _ => {
+                                    std::process::exit(c_int::from(errno()));
+                                }
+                            }
+                        }
+                        _ => {
+                            std::process::exit(c_int::from(errno()));
+                        }
+                    }
+                    unsafe { libc::close(fd) };
+                }
                 _ => {
-                    eprintln!("unexpected error with {err}");
+                    std::process::exit(c_int::from(errno()));
                 }
-            },
-        }
-    }
-}
-
-fn mount_helper(source: &str, target: &str, fstype: &str) -> rustix::io::Result<()> {
-    match mount::mount(source, target, fstype, MountFlags::empty(), None::<&CStr>) {
-        Ok(()) => {
-            println!("Mounted {target} successfully.");
-            Ok(())
-        }
-        Err(Errno::PERM) => {
-            println!("EPERM, permission failed");
-            Err(Errno::PERM)
-        }
-        Err(Errno::BUSY) => {
-            println!("EBUSY, {target} had already mounted");
-            Ok(())
-        }
-        Err(Errno::NOENT) => {
-            println!("ENOENT, need {target} directory to mount");
-            println!("Trying rustix::fs::mkdir, then mount again");
-            let mode = fs::Mode::RUSR
-                | fs::Mode::RGRP
-                | fs::Mode::ROTH
-                | fs::Mode::XUSR
-                | fs::Mode::XGRP
-                | fs::Mode::XOTH;
-            if let Err(mkdir_err) = fs::mkdir(target, mode) {
-                eprintln!("mkdir failed: {mkdir_err}");
-                Err(mkdir_err)
-            } else {
-                mount(source, target, fstype, MountFlags::empty(), None::<&CStr>)
             }
-        }
-        Err(err) => {
-            println!("mount returned errno {:?} ({err})", err.raw_os_error());
-            Err(err)
-        }
-    }
-}
 
-fn spawn_child(cmd: &CStr, args: &[&[u8]], env: &[&[u8]]) -> Result<i32, Errno> {
-    unsafe {
-        match kernel_fork() {
-            Ok(Fork::Child(_pid)) => {
-                match setsid() {
-                    Ok(_) => {
-                        let fd = open("/dev/ttyAMA0", OFlags::RDWR, fs::Mode::empty());
-                        match fd {
-                            Ok(fd) => {
-                                match stdio::dup2_stdin(&fd) {
-                                    Ok(()) => {}
-                                    Err(err) => {
-                                        std::process::exit(err.raw_os_error());
-                                    }
-                                }
-                                match stdio::dup2_stdout(&fd) {
-                                    Ok(()) => {}
-                                    Err(err) => {
-                                        std::process::exit(err.raw_os_error());
-                                    }
-                                }
-                                match stdio::dup2_stderr(&fd) {
-                                    Ok(()) => {}
-                                    Err(err) => {
-                                        std::process::exit(err.raw_os_error());
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                std::process::exit(err.raw_os_error());
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        std::process::exit(err.raw_os_error());
-                    }
-                }
-
-                let mut argv = vec![cmd.as_ptr()];
-                for v in args {
-                    argv.push(v.as_ptr())
-                }
-                argv.push(std::ptr::null());
-
-                let mut envp = vec![];
-                for v in env {
-                    envp.push(v.as_ptr());
-                }
-                envp.push(std::ptr::null());
-
-                let errno = execve(cmd, argv.as_ptr(), envp.as_ptr());
-                std::process::exit(errno.raw_os_error());
+            let mut argv = vec![cmd.as_ptr()];
+            for v in args {
+                argv.push(v.as_ptr())
             }
-            Ok(Fork::ParentOf(child_pid)) => Ok(child_pid.as_raw_pid()),
-            Err(err) => Err(err),
+            argv.push(std::ptr::null());
+
+            let mut envp = vec![];
+            for v in env {
+                envp.push(v.as_ptr());
+            }
+            envp.push(std::ptr::null());
+
+            unsafe { libc::execve(cmd.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
+            std::process::exit(c_int::from(errno()));
         }
+        child_pid if child_pid > 0 => Ok(child_pid),
+        _ => Err(c_int::from(errno())),
     }
 }

@@ -47,6 +47,8 @@ dependencies = [
 name = "simple-initd"
 version = "0.1.0"
 dependencies = [
+ "errno",
+ "libc",
  "rustix",
 ]
 
